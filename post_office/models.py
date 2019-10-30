@@ -1,27 +1,26 @@
 # -*- coding: utf-8 -*-
 from __future__ import unicode_literals
 
+import json
 import os
-
 from collections import namedtuple
+from email.mime.nonmultipart import MIMENonMultipart
 from uuid import uuid4
 
-from email.mime.nonmultipart import MIMENonMultipart
 from django.core.mail import EmailMessage, EmailMultiAlternatives
 from django.db import models
-from django.utils.encoding import python_2_unicode_compatible
-from django.utils.translation import pgettext_lazy, ugettext_lazy as _
 from django.utils import timezone
+from django.utils.encoding import python_2_unicode_compatible
+from django.utils.translation import pgettext_lazy
+from django.utils.translation import ugettext_lazy as _
 from jsonfield import JSONField
-
 from post_office import cache
 from post_office.fields import CommaSeparatedEmailField
 
-from .compat import text_type, smart_text
+from .compat import smart_text, text_type
 from .connections import connections
 from .settings import context_field_class, get_log_level, get_template_engine
 from .validators import validate_email_with_name, validate_template_syntax
-
 
 PRIORITY = namedtuple('PRIORITY', 'low medium high now')._make(range(4))
 STATUS = namedtuple('STATUS', 'sent failed queued')._make(range(3))
@@ -111,18 +110,23 @@ class Email(models.Model):
 
         connection = connections[self.backend_alias or 'default']
 
+        _headers = self.headers
+
+        if _headers and not isinstance(_headers, dict):
+            _headers = json.loads(_headers)
+
         if html_message:
             if plaintext_message:
                 msg = EmailMultiAlternatives(
                     subject=subject, body=plaintext_message, from_email=self.from_email,
                     to=self.to, bcc=self.bcc, cc=self.cc,
-                    headers=self.headers, connection=connection)
+                    headers=_headers, connection=connection)
                 msg.attach_alternative(html_message, "text/html")
             else:
                 msg = EmailMultiAlternatives(
                     subject=subject, body=html_message, from_email=self.from_email,
                     to=self.to, bcc=self.bcc, cc=self.cc,
-                    headers=self.headers, connection=connection)
+                    headers=_headers, connection=connection)
                 msg.content_subtype = 'html'
             if hasattr(multipart_template, 'attach_related'):
                 multipart_template.attach_related(msg)
@@ -131,13 +135,19 @@ class Email(models.Model):
             msg = EmailMessage(
                 subject=subject, body=plaintext_message, from_email=self.from_email,
                 to=self.to, bcc=self.bcc, cc=self.cc,
-                headers=self.headers, connection=connection)
+                headers=_headers, connection=connection)
 
         for attachment in self.attachments.all():
             if attachment.headers:
                 mime_part = MIMENonMultipart(*attachment.mimetype.split('/'))
                 mime_part.set_payload(attachment.file.read())
-                for key, val in attachment.headers.items():
+
+                _headers = attachment.headers
+
+                if not isinstance(_headers, dict):
+                    _headers = json.loads(_headers)
+
+                for key, val in _headers.items():
                     try:
                         mime_part.replace_header(key, val)
                     except KeyError:
